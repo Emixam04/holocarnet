@@ -102,15 +102,19 @@ var OWNER='Deviss';
 var GRADES=["CMD Deviss","CMD A'den","Gérant signature","Officier"];
 var SIGN_OK=[0,1,2],EDIT_OK=[0,1];
 var FB=false,needLogin=false,EMAIL=null,linked=false,db=null,myId=null,isOwner=false,me=null,tab='C',errMsg='',dbOk=true;
-var cmds=[],membres=[],mots=[],sigs=[],liens=[],ready={c:false,m:false,t:false,s:false,l:false};
+var cmdmail=[],myAcces=null,anon=false,cmds=[],membres=[],mots=[],sigs=[],liens=[],ready={c:false,m:false,t:false,s:false,l:true,x:false};
 var TARGETS=[''],DRAFT='',F={t:'',a:'',q:''},SF='todo';
 var $=function(i){return document.getElementById(i)};
 function key(e){return String(e||'').trim().toLowerCase()}
 function el(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n}
-function badge(g){return g>=0?el('span','badge g'+g,GRADES[g]):el('span')}
+function badge(g){return (g>=0&&GRADES[g])?el('span','badge g'+g,GRADES[g]):el('span')}
+function emailOf(m){var x=cmdmail.filter(function(c){return c._id===m._id})[0];return x?key(x.email):''}
+var VIEW={id:'visiteur',nom:'Visiteur',g:99};
 function fmt(t){try{return new Date(t).toLocaleString('fr-FR',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
 var CONF=null,CT=null;
 function safeErr(e){errMsg=((e&&e.code)?e.code+' : ':'')+((e&&e.message)||'Erreur de transmission');render();try{window.scrollTo(0,0)}catch(x){}}
+function accesSet(email,g,cmd){var e=key(email);if(!e)return Promise.resolve();return db.collection('acces').doc(e).set({g:+g,cmd:cmd,ts:Date.now()})}
+function accesDel(email){var e=key(email);if(!e)return Promise.resolve();return db.collection('acces').doc(e).delete()}
 function rid(){return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function ask(btn,fn){var t=btn.textContent,w=false;btn.onclick=function(){if(!w){w=true;btn.textContent='Confirmer ?';setTimeout(function(){w=false;btn.textContent=t},4000);return}w=false;btn.textContent=t;fn()}}
 function find(id){return cmds.concat(membres).filter(function(m){return m._id===id})[0]}
@@ -120,10 +124,8 @@ function gradeOf(id){if(id==='owner')return 0;var m=cmds.filter(function(x){retu
 function firstClaim(e){var c=liens.filter(function(l){return key(l.email)===e}).sort(function(a,b){return a.ts-b.ts});return c[0]||null}
 function computeMe(){
   if(isOwner)return {id:'owner',nom:OWNER,g:0};
-  var l=liens.filter(function(x){return x._id===myId})[0];if(!l)return null;
-  var e=key(l.email),f=firstClaim(e);if(!f||f._id!==myId)return null;
-  var m=cmds.filter(function(x){return key(x.email)===e})[0];
-  return m?{id:m._id,nom:m.nom,g:m.g|0}:null}
+  if(FB){if(!myAcces||!myAcces.cmd)return null;var m=cmds.filter(function(x){return x._id===myAcces.cmd})[0];return m?{id:m._id,nom:m.nom,g:m.g|0}:null}
+  return null}
 var canSign=function(){return me&&SIGN_OK.indexOf(me.g)>-1};
 var canEdit=function(){return me&&EDIT_OK.indexOf(me.g)>-1};
 
@@ -140,53 +142,34 @@ async function init(){
       else{
         firebase.initializeApp(C);
         var usr=await new Promise(function(res){var off=firebase.auth().onAuthStateChanged(function(x){off();res(x)})});
-        if(!usr){needLogin=true}
-        else{myId=usr.uid;EMAIL=key(usr.email);isOwner=EMAIL===key(window.OWNER_EMAIL);db=firebase.firestore()}
+        db=firebase.firestore();
+        if(!usr){anon=true;myId='visiteur'}
+        else{myId=usr.uid;EMAIL=key(usr.email);isOwner=EMAIL===key(window.OWNER_EMAIL);
+          if(!isOwner){try{var ad=await db.collection('acces').doc(EMAIL).get();if(ad.exists)myAcces=ad.data()}catch(e){}}}
       }
     }
   }catch(e){errMsg=(e&&e.message)||'';}
-  if(needLogin){render();return}
   if(!db){dbOk=false;render();return}
   var sub=function(n,cb,k){db.collection(n).onSnapshot(function(s){cb(s.docs.map(function(d){var x=Object.assign({},d.data()||{});x._id=d.id;return x}));ready[k]=true;render()},function(e){ready[k]=true;safeErr(e)})};
   sub('cmds',function(a){cmds=a},'c');
   sub('membres',function(a){membres=a},'m');
   sub('mots',function(a){mots=a.sort(function(x,y){return (y.ts||0)-(x.ts||0)})},'t');
   sub('signatures',function(a){sigs=a},'s');
-  sub('liens',function(a){liens=a},'l');
+  if(isOwner||myAcces){db.collection('cmdmail').onSnapshot(function(sn){cmdmail=sn.docs.map(function(d){var x=Object.assign({},d.data()||{});x._id=d.id;return x});ready.x=true;render()},function(){ready.x=true;render()})}else{ready.x=true}
   render()}
 
 function deny(main,title,txt){var d=el('div','panel deny');d.appendChild(el('h2','',title));d.appendChild(el('div','',txt));main.appendChild(d);return d}
 function render(){
   var nav=$('nav'),main=$('main'),who=$('who');main.textContent='';who.textContent='';nav.textContent='';nav.className='tbar hide';
   if(!dbOk){deny(main,'LIAISON COUPÉE',FB?'La configuration Firebase est absente ou invalide. Ouvrez index.html et renseignez FIREBASE_CONFIG.':'Le stockage partagé est indisponible dans cette vue. Ouvrez la page publiée.');return}
-  if(!myId){
-    var dl=deny(main,FB?'CONNEXION REQUISE':'IDENTITÉ INCONNUE',FB?'Connectez-vous avec votre compte Google (celui de votre invitation).':'Connectez-vous avec le compte invité pour ouvrir ce carnet.');
-    if(FB&&needLogin){var lb=el('button','','Connexion Google');lb.style.marginTop='16px';
-      lb.onclick=function(){var p=new firebase.auth.GoogleAuthProvider();firebase.auth().signInWithPopup(p).then(function(){location.reload()}).catch(function(e){errMsg=e.message;render()})};
-      dl.appendChild(lb);if(errMsg)dl.appendChild(el('div','note','⚠ '+errMsg))}
-    return}
-  if(!(ready.c&&ready.m&&ready.t&&ready.s&&ready.l)){main.appendChild(el('div','empty','Synchronisation des archives…'));return}
-  var mine=liens.filter(function(x){return x._id===myId})[0];
-  if(FB&&EMAIL&&!isOwner&&!mine&&!linked){linked=true;db.collection('liens').doc(myId).set({email:EMAIL,ts:Date.now()}).catch(safeErr)}
-  me=computeMe();
-  if(!me&&!isOwner){
-    var d;
-    if(!mine&&FB){main.appendChild(el('div','empty','Vérification de votre accès…'));return}
-    if(!mine){
-      d=deny(main,'DÉCLINEZ VOTRE SIGNAL','Entrez l\'adresse e-mail sous laquelle le commandement vous a accordé un grade.');
-      var rr=el('div','row');rr.style.cssText='margin-top:14px;justify-content:center';
-      var ie=el('input');ie.type='email';ie.placeholder='adresse@email.com';
-      var bb=el('button','','Valider');
-      bb.onclick=async function(){var e=key(ie.value);if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)){errMsg='Adresse e-mail invalide';render();return}
-        try{await db.collection('liens').doc(myId).set({email:e,ts:Date.now()});errMsg=''}catch(x){safeErr(x)}};
-      rr.appendChild(ie);rr.appendChild(bb);d.appendChild(rr)}
-    else{
-      var f=firstClaim(key(mine.email)),taken=f&&f._id!==myId;
-      d=deny(main,'ACCÈS REFUSÉ',taken?'Cette adresse est déjà liée à un autre compte. Demandez au commandement de la délier.':'Aucun grade n\'est lié à cette adresse. Demandez à un commandant de vous en accorder un.');
-      var ch=el('button','','Changer d\'adresse');ch.style.marginTop='16px';
-      ch.onclick=function(){db.collection('liens').doc(myId).delete().catch(safeErr)};d.appendChild(ch)}
-    if(errMsg)main.appendChild(el('div','note','⚠ '+errMsg));return}
-  who.appendChild(el('span','',me.nom));who.appendChild(badge(me.g));
+  me=computeMe()||VIEW;
+  if(FB&&canEdit()&&!window.__accSync){window.__accSync=true;
+    cmds.forEach(function(c){if(key(c.email)){var ee=key(c.email);Promise.all([db.collection('cmdmail').doc(c._id).set({email:ee}),accesSet(ee,c.g|0,c._id),db.collection('cmds').doc(c._id).update({email:firebase.firestore.FieldValue.delete()})]).catch(function(){})}})}
+  if(me.g===99){
+    who.appendChild(el('span','','Visiteur · lecture seule'));
+    if(FB&&anon){var lg=el('button','','Connexion (grade)');lg.onclick=function(){var p=new firebase.auth.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});lg.disabled=true;lg.textContent='Connexion…';firebase.auth().signInWithPopup(p).then(function(){location.reload()}).catch(function(e){var c=(e&&e.code)||'';if(c==='auth/popup-blocked'){firebase.auth().signInWithRedirect(p);return}errMsg=({'auth/unauthorized-domain':'Domaine non autorisé dans Firebase.','auth/popup-closed-by-user':'Fenêtre fermée. Réessaie.'}[c])||('Erreur '+c);lg.disabled=false;lg.textContent='Connexion (grade)';render()})};who.appendChild(lg)}
+    else if(FB){var lo=el('button','','Déconnexion');lo.onclick=function(){firebase.auth().signOut().then(function(){location.reload()})};who.appendChild(lo)}
+  }else who.appendChild(el('span','',me.nom));if(me.g!==99)who.appendChild(badge(me.g));
   var tabs=[['C','Carnet'],['H','Historique'],['E','Effectif']];tabs.push(['S','Signatures']);
   nav.className='tbar';
   tabs.forEach(function(t){var b=el('button',tab===t[0]?'on':'',t[1]);b.onclick=function(){tab=t[0];render()};nav.appendChild(b)});
@@ -293,13 +276,12 @@ function viewEffectif(){
     if(!ed){var r1=el('div','row');r1.appendChild(el('b','',m.nom));r1.appendChild(badge(m.g|0));row.appendChild(r1);p.appendChild(row);return}
     var nom=el('input');nom.value=m.nom;
     var g=el('select');GRADES.forEach(function(n,i){var x=el('option','',n);x.value=i;if(i===(m.g|0))x.selected=true;g.appendChild(x)});
-    var em=el('input');em.type='email';em.placeholder='e-mail (accès)';em.value=m.email||'';
+    var em=el('input');em.type='email';em.placeholder='e-mail (accès)';em.value=emailOf(m);
     var act=el('div','row');
-    function save(){var n=nom.value.trim();if(!n){nom.value=m.nom;return}db.collection('cmds').doc(m._id).set({nom:n,g:+g.value,email:key(em.value),ts:m.ts||Date.now()}).catch(safeErr)}
+    function save(){var n=nom.value.trim();if(!n){nom.value=m.nom;return}var ne=key(em.value),old=emailOf(m);
+      Promise.all([db.collection('cmds').doc(m._id).set({nom:n,g:+g.value,ts:m.ts||Date.now()}),db.collection('cmdmail').doc(m._id).set({email:ne})]).then(function(){var p=[accesSet(ne,g.value,m._id)];if(old&&old!==ne)p.push(accesDel(old));return Promise.all(p)}).catch(safeErr)}
     nom.onchange=save;g.onchange=save;em.onchange=save;
-    var f=firstClaim(key(m.email));
-    if(f){var ul=el('button','','Délier');ul.onclick=function(){db.collection('liens').doc(f._id).delete().catch(safeErr)};act.appendChild(ul)}
-    var rm=el('button','danger','Retirer');ask(rm,function(){db.collection('cmds').doc(m._id).delete().catch(safeErr)});act.appendChild(rm);
+    var rm=el('button','danger','Retirer');ask(rm,function(){var old=emailOf(m);Promise.all([db.collection('cmds').doc(m._id).delete(),db.collection('cmdmail').doc(m._id).delete(),accesDel(old)]).catch(safeErr)});act.appendChild(rm);
     var sep=el('div');sep.style.cssText='border-top:1px solid var(--dim);padding-top:8px';
     sep.appendChild(nom);sep.appendChild(document.createElement('div')).style.height='6px';sep.appendChild(g);sep.appendChild(document.createElement('div')).style.height='6px';sep.appendChild(em);sep.appendChild(document.createElement('div')).style.height='6px';sep.appendChild(act);
     nom.style.width=g.style.width=em.style.width='100%';
@@ -313,7 +295,7 @@ function viewEffectif(){
     var add=el('button','','Ajouter');
     [nom2,g2,em2].forEach(function(x){x.style.cssText='width:100%;margin:6px 0'});
     add.onclick=async function(){var n=nom2.value.trim(),e=key(em2.value);if(!n||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)){errMsg='Nom et e-mail valides requis';render();return}
-      try{await db.collection('cmds').doc(rid()).set({nom:n,g:+g2.value,email:e,ts:Date.now()});errMsg=''}catch(x){safeErr(x)}};
+      try{var nid=rid();await db.collection('cmds').doc(nid).set({nom:n,g:+g2.value,ts:Date.now()});await db.collection('cmdmail').doc(nid).set({email:e});await accesSet(e,g2.value,nid);errMsg=''}catch(x){safeErr(x)}};
     a.appendChild(nom2);a.appendChild(g2);a.appendChild(em2);a.appendChild(add);p.appendChild(a)}
   cols.appendChild(p);
   // Colonne membres (noms seulement)
@@ -338,7 +320,7 @@ function viewEffectif(){
 
 function viewSign(){
   var box=el('div');var bar=el('div','tbar');bar.style.justifyContent='center';
-  if(!canSign()){SF='all';box.appendChild(el('div','note','Lecture seule : votre grade (Officier) ne permet pas de signer.'))}
+  if(!canSign()){SF='all';box.appendChild(el('div','note','Lecture seule : votre accès ne permet pas de signer.'))}
   else [['todo','À signer'],['mine','Mes signatures'],['all','Tous']].forEach(function(t){var b=el('button',SF===t[0]?'on':'',t[1]);b.onclick=function(){SF=t[0];render()};bar.appendChild(b)});
   if(canSign())box.appendChild(bar);
   var arr=mots.filter(function(m){var s=sigs.some(function(x){return x.motId===m._id&&x.signerId===me.id});return SF==='all'||(SF==='todo'?!s:s)});
