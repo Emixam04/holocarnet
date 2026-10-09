@@ -162,6 +162,7 @@ function deny(main,title,txt){var d=el('div','panel deny');d.appendChild(el('h2'
 function render(){
   var nav=$('nav'),main=$('main'),who=$('who');main.textContent='';who.textContent='';nav.textContent='';nav.className='tbar hide';
   if(!dbOk){deny(main,'LIAISON COUPÉE',FB?'La configuration Firebase est absente ou invalide. Ouvrez index.html et renseignez FIREBASE_CONFIG.':'Le stockage partagé est indisponible dans cette vue. Ouvrez la page publiée.');return}
+  if(!(ready.c&&ready.m&&ready.t&&ready.s&&ready.l&&ready.x)){main.appendChild(el('div','empty','Synchronisation des archives…'));return}
   me=computeMe()||VIEW;
   if(FB&&canEdit()&&!window.__accSync){window.__accSync=true;
     cmds.forEach(function(c){if(key(c.email)){var ee=key(c.email);Promise.all([db.collection('cmdmail').doc(c._id).set({email:ee}),accesSet(ee,c.g|0,c._id),db.collection('cmds').doc(c._id).update({email:firebase.firestore.FieldValue.delete()})]).catch(function(){})}})}
